@@ -1,119 +1,84 @@
-# OnSinch Shift Notifier
+# OnSinch Shift Notifier Bot
 
-A Dockerised Telegram bot that monitors the Splendid OnSinch staffing platform for new available shifts and sends instant notifications to your Telegram account. The bot checks every 15 minutes and only notifies you about shifts you haven't seen before — no spam, no repeats.
+Get instant Telegram notifications whenever a new shift appears on Splendid's OnSinch platform — no more checking manually.
 
----
-
-## Prerequisites
-
-- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/) (v2+)
-- A Telegram bot token (see below)
-- Your OnSinch credentials for `splendid.onsinch.com`
+The bot checks every 15 minutes and only messages you about shifts you haven't seen before.
 
 ---
 
-## Setup
+## Getting started
 
-### 1. Create a Telegram bot
+### 1. Open a chat with the bot
 
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot` and follow the prompts (choose a name and username)
-3. Copy the **bot token** — it looks like `123456789:ABCdef...`
+Find the bot on Telegram and tap **Start**, or send `/start`.
 
-### 2. Configure environment variables
+### 2. Send your OnSinch credentials
 
-```bash
-cp .env.example .env
+When prompted, send your login details in this format:
+
+```
+yourname@example.com:yourpassword
 ```
 
-Edit `.env` and fill in:
+Your message is deleted immediately after the bot reads it. The bot will log in and confirm your credentials are working before saving anything.
 
-| Variable | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | The token from BotFather |
-| `POSTGRES_PASSWORD` | A strong password for the database |
-| `POSTGRES_DB` | Database name (default: `onsinch_bot`) |
-| `POSTGRES_USER` | Database user (default: `botuser`) |
-| `SCRAPE_INTERVAL_MINUTES` | How often to check for shifts (default: `15`) |
+### 3. That's it
 
-### 3. Start the bot
-
-```bash
-docker compose up -d --build
-```
-
-View logs:
-
-```bash
-docker compose logs -f bot
-```
-
----
-
-## Usage
-
-1. Open Telegram and start a chat with your bot
-2. Send `/start`
-3. Send your OnSinch credentials in the format:
-   ```
-   yourname@example.com:yourpassword
-   ```
-   The bot will delete your message immediately and validate your credentials.
-4. Once confirmed, the bot will notify you automatically whenever a new shift appears.
+Once confirmed, you'll receive a message automatically every time a new shift appears. You don't need to do anything else.
 
 ---
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `/start` | Register or re-authenticate with your OnSinch credentials |
-| `/stop` | Pause notifications |
-| `/check` | Trigger an immediate check and show current available shifts |
-| `/status` | Show your registration status and tracking stats |
+| `/start` | Register, or update your credentials if your password has changed |
+| `/stop` | Pause notifications (you can resume any time with `/start`) |
+| `/check` | See any new shifts available right now that you haven't been notified about yet |
+| `/status` | Check whether the bot is active and how many listings it's tracking for you |
+| `/help` | Show all available commands |
 
 ---
 
-## Notifications
+## What the notifications look like
 
-Each new shift is sent as a separate message. You'll see:
+Each new shift arrives as its own message. It includes:
 
-- **Shift name and event**
-- **Profession and specific role** (e.g. Waiting Staff — Food)
-- **Date and time** in UK local time
-- **Location**
-- **Spots available**
+- Shift name and event
+- Your role and profession (e.g. Waiting Staff — Food)
+- Date and time, shown in UK local time
+- Location
+- Number of spots available
+- A link to view and apply on OnSinch
 
-Special indicators:
+Special labels:
 
-- ⭐ Featured shifts are highlighted
-- ⚠️ Shifts that conflict with your existing bookings are flagged with a warning
-- 🎖️ Team Leader positions are labelled
+- ⭐ **Featured** — highlighted shifts from the organiser
+- ⚠️ **Conflict** — this shift overlaps with something already in your schedule
+- 🎖️ **Team Leader** — positions with a leadership role
+- ⚠️ **Requirements** — you may not meet the eligibility criteria for this shift
 
 ---
 
 ## Troubleshooting
 
-**Bot says "Login failed"**
-- Double-check your `email:password` — make sure there are no extra spaces
-- If your OnSinch password contains a colon (`:`), everything after the first `:` is treated as the password, so this should work fine
-- The login page uses Google reCAPTCHA. The bot uses browser automation to handle this transparently; if Splendid has added extra security measures, login may fail intermittently
+**"Login failed" when I send my credentials**
+- Check for typos — make sure there are no spaces before or after your email or password
+- If your password contains a colon (`:`), don't worry — everything after the first `:` is treated as the password
+- Occasionally the login page shows a reCAPTCHA challenge that blocks the bot. Wait a few minutes and try again
 
-**I stopped receiving notifications after a few weeks**
-- Your OnSinch session cookie expires approximately every 24 hours — the bot re-logs in automatically
-- If your OnSinch password changed, the bot will send a warning message. Use `/start` and re-enter your new credentials
+**I stopped getting notifications**
+- Send `/status` to check if the bot is still active
+- If you see an auth failure warning in Telegram, your OnSinch password may have changed — use `/start` to re-enter your credentials
+- The bot handles session expiry automatically, so you normally don't need to do anything
 
-**reCAPTCHA blocking login**
-- The bot uses Playwright with stealth mode to avoid triggering reCAPTCHA challenges
-- If a challenge appears despite this, the bot will log a warning but cannot solve visual challenges automatically. Try again after a few minutes; low scrape frequency (15 min) minimises the risk
-
-**Database connection errors on first start**
-- Docker Compose waits for Postgres to be healthy before starting the bot. If you see connection errors, check `docker compose logs db`
+**`/check` says "No new shifts" but I can see shifts on OnSinch**
+- `/check` only shows shifts you haven't been notified about yet. If the bot already sent you a notification for a shift, it won't show it again here
 
 ---
 
-## Security notes
+## Privacy
 
-- Credentials are stored in the Postgres database. Keep your `.env` file and `data/sessions/` directory secure and out of version control (both are in `.gitignore`)
-- The bot deletes your credential message from Telegram chat history immediately after reading it
-- Session state files in `data/sessions/` contain authentication tokens — do not share them
+- Your email and password are stored in an encrypted database on the server running the bot
+- Your credential message is deleted from Telegram immediately after the bot reads it
+- Session tokens are stored locally on the server and are never shared
