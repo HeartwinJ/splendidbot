@@ -18,6 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
     users = await db.get_active_users()
