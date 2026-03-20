@@ -68,8 +68,9 @@ async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
             )
 
             if not silent:
-                for pos in new_positions:
-                    await tgbot.send_new_shift_notification(app.bot, chat_id, pos)
+                shift_groups = tgbot._group_positions_by_shift(new_positions)
+                for group in shift_groups:
+                    await tgbot.send_new_shift_notification(app.bot, chat_id, group)
                     await asyncio.sleep(MESSAGE_SEND_DELAY)
         else:
             logger.debug("No new positions for chat_id=%s", chat_id)

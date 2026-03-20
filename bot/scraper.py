@@ -214,9 +214,18 @@ def _filter_and_parse(data: dict) -> list[dict]:
         profession = professions.get(str(pos["profession"]), {})
         location = locations.get(str(pos["location"]), {})
 
+        organizer_name = ""
+        company_id = shift.get("company") or shift.get("organizer")
+        if company_id:
+            companies = entities.get("Company", {})
+            company = companies.get(str(company_id), {})
+            organizer_name = company.get("name", "")
+
         result.append({
             "id": pos["id"],
+            "shift_id": pos["shift"],
             "shift_name": shift.get("name", "Unknown Shift"),
+            "organizer": organizer_name,
             "profession": profession.get("name", "Unknown Profession"),
             "location": location.get("name", "Unknown Location"),
             "title": pos.get("title", "").strip(),

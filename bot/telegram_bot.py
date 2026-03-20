@@ -48,49 +48,73 @@ def _format_dt_range(start_iso: str, end_iso: str) -> str:
     return f"{day_str} {date_str}, {start_t} – {end_t}"
 
 
-def format_position_message(pos: dict) -> str:
+def _group_positions_by_shift(positions: list[dict]) -> list[list[dict]]:
+    from collections import OrderedDict
+    grouped: OrderedDict[int, list[dict]] = OrderedDict()
+    for pos in positions:
+        sid = pos.get("shift_id", pos["id"])
+        grouped.setdefault(sid, []).append(pos)
+    return list(grouped.values())
+
+
+def format_shift_message(shift_positions: list[dict]) -> str:
+    first = shift_positions[0]
     lines: list[str] = []
 
-    if pos["featured"] and not pos["in_conflict"]:
-        lines.append(f"⭐ *Featured: {md_escape(pos['shift_name'])}*")
-    elif pos["in_conflict"]:
-        lines.append("⚠️ *CONFLICTS WITH EXISTING SHIFT*\n")
-        lines.append(f"📋 *{md_escape(pos['shift_name'])}*")
+    has_conflict = any(p["in_conflict"] for p in shift_positions)
+    has_req_failed = any(p.get("requirements_failed") for p in shift_positions)
+
+    if first["featured"]:
+        lines.append(f"⭐ *{md_escape(first['shift_name'])}*")
     else:
-        lines.append(f"📋 *{md_escape(pos['shift_name'])}*")
+        lines.append(f"📋 *{md_escape(first['shift_name'])}*")
 
-    lines.append("")
-
-    profession_str = md_escape(pos["profession"])
-    if pos["title"]:
-        profession_str += f" — {md_escape(pos['title'])}"
-    if pos["role"] == 2:
-        profession_str += " — 🎖️ Team Leader"
-    lines.append(f"👤 {profession_str}")
+    if first.get("organizer"):
+        lines.append(f"🏢 {md_escape(first['organizer'])}")
 
     try:
-        dt_str = _format_dt_range(pos["start_time"], pos["end_time"])
+        dt_str = _format_dt_range(first["start_time"], first["end_time"])
         lines.append(f"📅 {md_escape(dt_str)}")
     except Exception as exc:
-        logger.warning("Failed to format datetime for position %s: %s", pos.get("id"), exc)
-        lines.append(f"📅 {md_escape(pos['start_time'])}")
+        logger.warning("Failed to format datetime for shift %s: %s", first.get("shift_id"), exc)
+        lines.append(f"📅 {md_escape(first['start_time'])}")
 
-    lines.append(f"📍 {md_escape(pos['location'])}")
+    lines.append(f"📍 {md_escape(first['location'])}")
 
-    spots = pos["free_capacity"]
-    spot_word = "spot" if spots == 1 else "spots"
-    if spots == 0:
-        lines.append(f"👥 0 spots \\(full\\)")
-    else:
-        lines.append(f"👥 {md_escape(str(spots))} {spot_word} available")
+    lines.append("")
+    lines.append("*Positions:*")
 
-    if pos.get("applicants"):
+    for pos in shift_positions:
+        spots = pos["free_capacity"]
+        spot_word = "spot" if spots == 1 else "spots"
+
+        role_label = ""
+        if pos["title"]:
+            role_label = f" — {md_escape(pos['title'])}"
+        if pos["role"] == 2:
+            role_label += " 🎖️ TL"
+
+        spot_str = f"{spots} {spot_word}" if spots > 0 else "0 spots \\(full\\)"
+
+        tags = ""
+        if pos.get("requirements_failed"):
+            tags += " 🚫"
+        if pos["in_conflict"]:
+            tags += " ⚠️"
+        if pos.get("applicants"):
+            tags += " 📝"
+
+        lines.append(
+            f"  • {md_escape(pos['profession'])}{role_label} "
+            f"— {spot_str}{tags}"
+        )
+
+    if has_req_failed or has_conflict:
         lines.append("")
-        lines.append("📝 _Sign up as applicant_")
-
-    if pos.get("requirements_failed"):
-        lines.append("")
-        lines.append("⚠️ You may not meet the requirements for this position")
+        if has_req_failed:
+            lines.append("🚫 Requirements not met")
+        if has_conflict:
+            lines.append("⚠️ Conflicts with existing shift")
 
     lines.append("")
     lines.append(f"🔗 [View on OnSinch]({POSITIONS_URL})")
@@ -223,19 +247,20 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("No new shifts found right now.")
         return
 
+    shift_groups = _group_positions_by_shift(new_positions)
     await update.message.reply_text(
-        f"Found *{len(new_positions)}* new shift(s):",
+        f"Found *{len(shift_groups)}* new shift(s) with *{len(new_positions)}* position(s):",
         parse_mode=ParseMode.MARKDOWN,
     )
-    for pos in new_positions:
+    for group in shift_groups:
         try:
             await update.message.reply_text(
-                format_position_message(pos),
+                format_shift_message(group),
                 parse_mode=ParseMode.MARKDOWN_V2,
                 disable_web_page_preview=True,
             )
         except Exception as exc:
-            logger.error("Failed to send position %s: %s", pos["id"], exc)
+            logger.error("Failed to send shift %s: %s", group[0].get("shift_id"), exc)
         await asyncio.sleep(MESSAGE_SEND_DELAY)
 
 
@@ -316,18 +341,18 @@ def build_application(token: str) -> Application:
     return app
 
 
-async def send_new_shift_notification(bot, chat_id: int, pos: dict) -> None:
+async def send_new_shift_notification(bot, chat_id: int, shift_positions: list[dict]) -> None:
     try:
         await bot.send_message(
             chat_id=chat_id,
-            text=format_position_message(pos),
+            text=format_shift_message(shift_positions),
             parse_mode=ParseMode.MARKDOWN_V2,
             disable_web_page_preview=True,
         )
     except Exception as exc:
         logger.error(
-            "Failed to send shift notification for position %s to chat_id %s: %s",
-            pos["id"],
+            "Failed to send shift notification for shift %s to chat_id %s: %s",
+            shift_positions[0].get("shift_id"),
             chat_id,
             exc,
         )
