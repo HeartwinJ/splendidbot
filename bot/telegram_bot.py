@@ -415,6 +415,11 @@ def build_application(token: str) -> Application:
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_credentials)
     )
 
+    async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error("Unhandled exception: %s", context.error, exc_info=context.error)
+
+    app.add_error_handler(_error_handler)
+
     return app
 
 

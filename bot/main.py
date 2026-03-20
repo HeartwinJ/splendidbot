@@ -129,7 +129,10 @@ async def main() -> None:
         ("settings", "Configure shift filter preferences"),
         ("help",     "Show all available commands"),
     ])
-    await app.updater.start_polling(drop_pending_updates=True)
+    await app.updater.start_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"],
+    )
     logger.info("Bot started — polling for updates")
 
     logger.info("Running initial silent scrape to populate seen_listings")
