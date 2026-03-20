@@ -221,11 +221,13 @@ def _settings_keyboard(filters: dict) -> InlineKeyboardMarkup:
 
 
 def _settings_text(filters: dict) -> str:
-    return (
-        "*Filter settings*\n\n"
-        "Choose which shifts to include in notifications\\.\n"
-        "Tap a button to toggle it on/off\\."
-    )
+    lines = ["*Filter settings*\n"]
+    for col, label in FILTER_LABELS.items():
+        enabled = filters.get(col, False)
+        icon = "✅" if enabled else "❌"
+        lines.append(f"{icon} {md_escape(label)}")
+    lines.append("\n_Tap a button to toggle\\._")
+    return "\n".join(lines)
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
