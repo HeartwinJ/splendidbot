@@ -106,6 +106,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "*Available commands*\n\n"
+        "/start — Register or re\\-authenticate with your OnSinch credentials\n"
+        "/stop — Pause shift notifications\n"
+        "/check — Check for available shifts right now\n"
+        "/status — Show your account status and tracking stats\n"
+        "/help — Show this message",
+        parse_mode=ParseMode.MARKDOWN_V2,
+    )
+
+
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     user = await db.get_user(chat_id)
@@ -233,8 +245,9 @@ def build_application(token: str) -> Application:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("stop", cmd_stop))
-    app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("check", cmd_check))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_credentials)
     )

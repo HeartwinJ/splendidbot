@@ -120,6 +120,13 @@ async def main() -> None:
     scheduler.start()
     await app.initialize()
     await app.start()
+    await app.bot.set_my_commands([
+        ("start",  "Register or re-authenticate with your OnSinch credentials"),
+        ("stop",   "Pause shift notifications"),
+        ("check",  "Check for available shifts right now"),
+        ("status", "Show your account status and tracking stats"),
+        ("help",   "Show all available commands"),
+    ])
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Bot started — polling for updates")
 
