@@ -164,7 +164,13 @@ def _is_session_expired_error(exc: Exception) -> bool:
     return False
 
 
-def _filter_and_parse(data: dict) -> list[dict]:
+def _filter_and_parse(data: dict, filters: dict | None = None) -> list[dict]:
+    if filters is None:
+        filters = {}
+    show_standby = filters.get("show_standby", False)
+    show_at_capacity = filters.get("show_at_capacity", False)
+    show_in_conflict = filters.get("show_in_conflict", True)
+
     try:
         entities = data["entities"]
         position_ids = data["result"]["positionIds"]
@@ -191,15 +197,19 @@ def _filter_and_parse(data: dict) -> list[dict]:
         if pos is None:
             continue
 
-        if pos.get("role") == 1:
+        if pos.get("role") == 1 and not show_standby:
             continue
         if pos.get("cancelled"):
             continue
         if pos.get("hidden"):
             continue
-        if pos.get("freeCapacity", 0) <= 0:
+        if pos.get("freeCapacity", 0) <= 0 and not show_at_capacity:
+            continue
+        if pos.get("inConflict") and not show_in_conflict:
             continue
         if pos["id"] in booked_position_ids:
+            continue
+        if pos.get("applicants"):
             continue
 
         start_time_str = pos["startTime"]
@@ -238,19 +248,20 @@ def _filter_and_parse(data: dict) -> list[dict]:
             "in_conflict": pos.get("inConflict", False),
             "conflicting_positions": pos.get("conflicting", {}).get("position", []),
             "requirements_failed": pos.get("requirementsFailed", False),
-            "applicants": bool(pos.get("applicants", False)),
         })
 
     return result
 
 
-async def scrape_positions(chat_id: int, email: str, password: str) -> list[dict]:
+async def scrape_positions(
+    chat_id: int, email: str, password: str, filters: dict | None = None
+) -> list[dict]:
     cookie = _read_cookie_from_state(chat_id)
 
     if cookie:
         try:
             data = await _call_positions_api(cookie)
-            positions = _filter_and_parse(data)
+            positions = _filter_and_parse(data, filters)
             logger.info("Scraped %d positions for chat_id=%s (session reused)", len(positions), chat_id)
             return positions
         except Exception as exc:
@@ -261,7 +272,7 @@ async def scrape_positions(chat_id: int, email: str, password: str) -> list[dict
 
     cookie = await _playwright_login(email, password, chat_id)
     data = await _call_positions_api(cookie)
-    positions = _filter_and_parse(data)
+    positions = _filter_and_parse(data, filters)
     logger.info("Scraped %d positions for chat_id=%s (fresh login)", len(positions), chat_id)
     return positions
 

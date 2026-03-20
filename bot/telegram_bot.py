@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import pytz
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction, ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
 import scraper
@@ -101,8 +101,6 @@ def format_shift_message(shift_positions: list[dict]) -> str:
             tags += " 🚫"
         if pos["in_conflict"]:
             tags += " ⚠️"
-        if pos.get("applicants"):
-            tags += " 📝"
 
         lines.append(
             f"  • {md_escape(pos['profession'])}{role_label} "
@@ -158,6 +156,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/stop — Pause shift notifications\n"
         "/check — Check for available shifts right now\n"
         "/status — Show your account status and tracking stats\n"
+        "/settings — Configure shift filter preferences\n"
         "/help — Show this message",
         parse_mode=ParseMode.MARKDOWN_V2,
     )
@@ -203,6 +202,78 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Something went wrong. Please try again.")
 
 
+FILTER_LABELS = {
+    "show_standby": "Standby shifts",
+    "show_at_capacity": "Full (0 spots) shifts",
+    "show_in_conflict": "Conflicting shifts",
+}
+
+
+def _settings_keyboard(filters: dict) -> InlineKeyboardMarkup:
+    buttons = []
+    for col, label in FILTER_LABELS.items():
+        enabled = filters.get(col, False)
+        icon = "✅" if enabled else "❌"
+        buttons.append(
+            [InlineKeyboardButton(f"{icon} {label}", callback_data=f"toggle:{col}")]
+        )
+    return InlineKeyboardMarkup(buttons)
+
+
+def _settings_text(filters: dict) -> str:
+    return (
+        "*Filter settings*\n\n"
+        "Choose which shifts to include in notifications\\.\n"
+        "Tap a button to toggle it on/off\\."
+    )
+
+
+async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    try:
+        user = await db.get_user(chat_id)
+    except Exception as exc:
+        logger.error("cmd_settings db error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
+        return
+
+    if not user:
+        await update.message.reply_text("You're not registered yet. Use /start to set up.")
+        return
+
+    filters = await db.get_user_filters(chat_id)
+    await update.message.reply_text(
+        _settings_text(filters),
+        parse_mode=ParseMode.MARKDOWN_V2,
+        reply_markup=_settings_keyboard(filters),
+    )
+
+
+async def handle_settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    if not data or not data.startswith("toggle:"):
+        return
+
+    column = data.split(":", 1)[1]
+    if column not in FILTER_LABELS:
+        return
+
+    chat_id = query.message.chat_id
+    try:
+        await db.toggle_user_filter(chat_id, column)
+        filters = await db.get_user_filters(chat_id)
+        await query.edit_message_text(
+            _settings_text(filters),
+            parse_mode=ParseMode.MARKDOWN_V2,
+            reply_markup=_settings_keyboard(filters),
+        )
+    except Exception as exc:
+        logger.error("handle_settings_callback error for chat_id=%s: %s", chat_id, exc)
+
+
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     try:
@@ -219,10 +290,12 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.info("Manual check triggered by chat_id=%s", chat_id)
     await update.message.reply_text("🔍 Checking for available shifts…")
 
+    user_filters = await db.get_user_filters(chat_id)
+
     _typing = asyncio.create_task(_keep_typing(context.bot, chat_id))
     try:
         positions = await scraper.scrape_positions(
-            chat_id, user["email"], user["password"]
+            chat_id, user["email"], user["password"], user_filters
         )
     except Exception as exc:
         logger.error("Manual check failed for chat_id=%s: %s", chat_id, exc)
@@ -333,7 +406,9 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CallbackQueryHandler(handle_settings_callback, pattern=r"^toggle:"))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_credentials)
     )

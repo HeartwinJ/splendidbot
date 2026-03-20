@@ -31,7 +31,8 @@ async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
         password: str = user["password"]
 
         try:
-            positions = await scraper.scrape_positions(chat_id, email, password)
+            user_filters = await db.get_user_filters(chat_id)
+            positions = await scraper.scrape_positions(chat_id, email, password, user_filters)
         except RuntimeError as exc:
             logger.error("Auth failed for chat_id=%s: %s", chat_id, exc)
             await db.set_user_status(chat_id, "auth_failed")
@@ -121,11 +122,12 @@ async def main() -> None:
     await app.initialize()
     await app.start()
     await app.bot.set_my_commands([
-        ("start",  "Register or re-authenticate with your OnSinch credentials"),
-        ("stop",   "Pause shift notifications"),
-        ("check",  "Check for available shifts right now"),
-        ("status", "Show your account status and tracking stats"),
-        ("help",   "Show all available commands"),
+        ("start",    "Register or re-authenticate with your OnSinch credentials"),
+        ("stop",     "Pause shift notifications"),
+        ("check",    "Check for available shifts right now"),
+        ("status",   "Show your account status and tracking stats"),
+        ("settings", "Configure shift filter preferences"),
+        ("help",     "Show all available commands"),
     ])
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Bot started — polling for updates")

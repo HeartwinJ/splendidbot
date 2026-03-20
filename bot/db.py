@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS seen_listings (
 );
 """
 
+ADD_FILTER_COLUMNS = [
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS show_standby BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS show_at_capacity BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS show_in_conflict BOOLEAN DEFAULT TRUE",
+]
+
 
 async def get_pool() -> asyncpg.Pool:
     global _pool
@@ -65,6 +71,8 @@ async def init_db() -> None:
     async with pool.acquire() as conn:
         await conn.execute(CREATE_USERS_TABLE)
         await conn.execute(CREATE_SEEN_LISTINGS_TABLE)
+        for stmt in ADD_FILTER_COLUMNS:
+            await conn.execute(stmt)
     logger.info("Database schema initialised")
 
 
@@ -133,6 +141,31 @@ async def mark_listings_seen(chat_id: int, listing_ids: list[str]) -> None:
             """,
             [(chat_id, lid) for lid in listing_ids],
         )
+
+
+async def get_user_filters(chat_id: int) -> dict:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT show_standby, show_at_capacity, show_in_conflict FROM users WHERE chat_id = $1",
+            chat_id,
+        )
+    if row is None:
+        return {"show_standby": False, "show_at_capacity": False, "show_in_conflict": True}
+    return dict(row)
+
+
+async def toggle_user_filter(chat_id: int, column: str) -> bool:
+    if column not in ("show_standby", "show_at_capacity", "show_in_conflict"):
+        raise ValueError(f"Invalid filter column: {column}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE users SET {column} = NOT {column}, updated_at = NOW() "
+            f"WHERE chat_id = $1 RETURNING {column}",
+            chat_id,
+        )
+    return row[column]
 
 
 async def cleanup_old_seen_listings(days: int = 30) -> int:
