@@ -14,7 +14,7 @@ ONSINCH_BASE_URL: str = os.getenv("ONSINCH_BASE_URL", "https://splendid.onsinch.
 SESSIONS_DIR: str = "/data/sessions"
 LOGIN_TIMEOUT_MS: int = 30_000
 API_RETRY_COUNT: int = 3
-MESSAGE_SEND_DELAY: float = 0.5  # seconds between Telegram messages
+MESSAGE_SEND_DELAY: float = 0.5
 
 POSITIONS_API_HEADERS: dict = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",

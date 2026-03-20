@@ -1,7 +1,3 @@
-"""
-main.py — Entry point: starts the Telegram bot and background APScheduler.
-"""
-
 import asyncio
 import logging
 import signal
@@ -23,18 +19,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Scrape cycle
-# ---------------------------------------------------------------------------
-
 async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
-    """
-    Fetch positions for all active users, compare against seen_listings,
-    and send notifications for new ones.
-
-    When `silent=True` (first run on startup), populate seen_listings without
-    sending notifications.
-    """
     users = await db.get_active_users()
     logger.info("Scrape cycle starting — %d active user(s), silent=%s", len(users), silent)
 
@@ -87,9 +72,6 @@ async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
         else:
             logger.debug("No new positions for chat_id=%s", chat_id)
 
-        # Also mark all currently-visible positions as seen (not just new ones),
-        # so we don't repeatedly try to "notify" about positions we've already
-        # skipped due to filtering changes.  Only store IDs we actually processed.
         all_visible_ids = [str(p["id"]) for p in positions]
         await db.mark_listings_seen(chat_id, all_visible_ids)
 
@@ -104,18 +86,11 @@ async def cleanup_job() -> None:
     await db.cleanup_old_seen_listings(days=30)
 
 
-# ---------------------------------------------------------------------------
-# Startup / shutdown
-# ---------------------------------------------------------------------------
-
 async def main() -> None:
-    # Init DB
     await db.init_db()
 
-    # Build Telegram application
     app: Application = tgbot.build_application(TELEGRAM_BOT_TOKEN)
 
-    # APScheduler
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         scheduled_scrape,
@@ -133,31 +108,26 @@ async def main() -> None:
         id="cleanup",
     )
 
-    # Graceful shutdown handler
     shutdown_event = asyncio.Event()
 
-    def _handle_signal(signum, frame):  # noqa: ANN001
+    def _handle_signal(signum, frame):
         logger.info("Received signal %s — shutting down", signum)
         shutdown_event.set()
 
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    # Start scheduler and bot
     scheduler.start()
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     logger.info("Bot started — polling for updates")
 
-    # Silent first run: populate seen_listings so we don't flood users on restart
     logger.info("Running initial silent scrape to populate seen_listings")
     await run_scrape_cycle(app, silent=True)
 
-    # Wait until shutdown signal
     await shutdown_event.wait()
 
-    # Cleanup
     logger.info("Shutting down...")
     scheduler.shutdown(wait=False)
     await app.updater.stop()

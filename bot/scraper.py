@@ -1,13 +1,9 @@
-"""
-scraper.py — Playwright auth + OnSinch API calls + position filtering/parsing.
-"""
-
 import asyncio
 import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Optional
 
 import httpx
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
@@ -26,16 +22,11 @@ logger = logging.getLogger(__name__)
 COOKIE_NAME = "Sinch_app_cookie_splendid"
 
 
-# ---------------------------------------------------------------------------
-# Session file helpers
-# ---------------------------------------------------------------------------
-
 def _session_path(chat_id: int) -> str:
     return os.path.join(SESSIONS_DIR, f"{chat_id}.json")
 
 
 def _read_cookie_from_state(chat_id: int) -> Optional[str]:
-    """Read the session cookie directly from the saved Playwright state file."""
     path = _session_path(chat_id)
     if not os.path.exists(path):
         return None
@@ -50,20 +41,19 @@ def _read_cookie_from_state(chat_id: int) -> Optional[str]:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Playwright login
-# ---------------------------------------------------------------------------
-
 async def _playwright_login(email: str, password: str, chat_id: int) -> str:
-    """
-    Launch a stealth Chromium browser, log in, save storage state, return cookie.
-    Raises RuntimeError on failure.
-    """
-    from playwright_stealth import stealth_async  # imported here to keep startup fast
+    from playwright_stealth import stealth_async
 
     logger.info("Launching Playwright for login (chat_id=%s)", chat_id)
     async with async_playwright() as p:
-        browser: Browser = await p.chromium.launch(headless=True)
+        browser: Browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
+        )
         context: BrowserContext = await browser.new_context(
             viewport={"width": 1920, "height": 1080},
             user_agent=(
@@ -71,55 +61,58 @@ async def _playwright_login(email: str, password: str, chat_id: int) -> str:
                 "Gecko/20100101 Firefox/148.0"
             ),
         )
+
         page: Page = await context.new_page()
         await stealth_async(page)
 
         try:
-            logger.debug("Navigating to login page")
             await page.goto(f"{ONSINCH_BASE_URL}/", timeout=LOGIN_TIMEOUT_MS)
 
-            await page.fill('input[name="email"]', email)
-            await page.fill('input[name="password"]', password)
-            await page.click('button[type="submit"]')
-
-            # Wait for navigation away from the login page (302 → dashboard)
+            email_selector = 'input[name="email"]'
             try:
-                await page.wait_for_url(
-                    lambda url: "/users/login" not in url and url != f"{ONSINCH_BASE_URL}/",
-                    timeout=LOGIN_TIMEOUT_MS,
-                )
+                await page.wait_for_selector(email_selector, state="visible", timeout=10000)
             except Exception:
-                # Still on login page → credentials failed
-                current_url = page.url
-                logger.warning("Login failed for chat_id=%s — still on %s", chat_id, current_url)
-                raise RuntimeError("Login failed: still on login page after submit")
+                for sel in ['input[type="email"]', 'input[type="text"]']:
+                    try:
+                        await page.wait_for_selector(sel, state="visible", timeout=5000)
+                        email_selector = sel
+                        break
+                    except Exception:
+                        continue
+                else:
+                    raise RuntimeError("Could not find email input field on login page")
 
-            # Save storage state
+            await page.fill(email_selector, email)
+            await page.fill('input[type="password"]', password)
+
+            async with page.expect_navigation(timeout=LOGIN_TIMEOUT_MS):
+                await page.click('input[type="submit"]')
+
+            await asyncio.sleep(1)
+
+            cookies = await context.cookies()
+            cookie_value = next(
+                (c["value"] for c in cookies if c["name"] == COOKIE_NAME), None
+            )
+            if not cookie_value:
+                logger.warning(
+                    "Login failed for chat_id=%s — session cookie absent after submit (url=%s)",
+                    chat_id,
+                    page.url,
+                )
+                raise RuntimeError("Login failed: invalid credentials or reCAPTCHA challenge")
+
             os.makedirs(SESSIONS_DIR, exist_ok=True)
             await context.storage_state(path=_session_path(chat_id))
             logger.info("Session saved for chat_id=%s", chat_id)
 
-            # Extract cookie
-            cookies = await context.cookies()
-            for cookie in cookies:
-                if cookie["name"] == COOKIE_NAME:
-                    return cookie["value"]
-
-            raise RuntimeError(f"Login succeeded but {COOKIE_NAME} cookie not found")
+            return cookie_value
         finally:
             await context.close()
             await browser.close()
 
 
-# ---------------------------------------------------------------------------
-# API call
-# ---------------------------------------------------------------------------
-
 async def _call_positions_api(cookie_value: str) -> dict:
-    """
-    POST to the OnSinch positions API and return the parsed JSON body.
-    Raises httpx.HTTPStatusError on non-2xx; returns dict on success.
-    """
     headers = {**POSITIONS_API_HEADERS, "Cookie": f"{COOKIE_NAME}={cookie_value}"}
 
     last_exc: Optional[Exception] = None
@@ -132,7 +125,6 @@ async def _call_positions_api(cookie_value: str) -> dict:
                     headers=headers,
                 )
                 if response.status_code in (301, 302, 303, 307, 308):
-                    # Redirect → session expired
                     raise httpx.HTTPStatusError(
                         "Session expired (redirect)",
                         request=response.request,
@@ -142,7 +134,7 @@ async def _call_positions_api(cookie_value: str) -> dict:
                 return response.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (401, 403) or "Session expired" in str(exc):
-                raise  # let caller handle re-login
+                raise
             last_exc = exc
         except Exception as exc:
             last_exc = exc
@@ -161,10 +153,6 @@ async def _call_positions_api(cookie_value: str) -> dict:
     raise RuntimeError(f"API call failed after {API_RETRY_COUNT} attempts") from last_exc
 
 
-# ---------------------------------------------------------------------------
-# Filtering & parsing
-# ---------------------------------------------------------------------------
-
 def _is_session_expired_error(exc: Exception) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (401, 403) or "Session expired" in str(exc)
@@ -172,7 +160,6 @@ def _is_session_expired_error(exc: Exception) -> bool:
 
 
 def _filter_and_parse(data: dict) -> list[dict]:
-    """Apply all filtering rules and return parsed position dicts."""
     entities = data["entities"]
     positions = entities.get("Position", {})
     shifts = entities.get("Shift", {})
@@ -180,7 +167,6 @@ def _filter_and_parse(data: dict) -> list[dict]:
     locations = entities.get("Location", {})
     attendances = entities.get("PositionAttendance", {})
 
-    # Build set of position IDs the user is already booked on
     booked_position_ids: set[int] = set()
     if isinstance(attendances, dict):
         for att in attendances.values():
@@ -194,9 +180,8 @@ def _filter_and_parse(data: dict) -> list[dict]:
         if pos is None:
             continue
 
-        # Exclusion filters
         if pos.get("role") == 1:
-            continue  # standby
+            continue
         if pos.get("cancelled"):
             continue
         if pos.get("hidden"):
@@ -204,19 +189,18 @@ def _filter_and_parse(data: dict) -> list[dict]:
         if pos.get("freeCapacity", 0) <= 0:
             continue
         if pos.get("applicants"):
-            continue  # already applied
+            continue
         if pos["id"] in booked_position_ids:
-            continue  # already booked
+            continue
 
         start_time_str = pos["startTime"]
         try:
             start_dt = datetime.fromisoformat(start_time_str)
             if start_dt < now_utc:
-                continue  # past
+                continue
         except ValueError:
             pass
 
-        # Resolve entity references
         shift = shifts.get(str(pos["shift"]), {})
         profession = professions.get(str(pos["profession"]), {})
         location = locations.get(str(pos["location"]), {})
@@ -241,26 +225,14 @@ def _filter_and_parse(data: dict) -> list[dict]:
     return result
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 async def scrape_positions(chat_id: int, email: str, password: str) -> list[dict]:
-    """
-    Main entry point.  Returns a list of filtered, parsed position dicts.
-    Raises RuntimeError if authentication fails definitively.
-    """
     cookie = _read_cookie_from_state(chat_id)
 
     if cookie:
         try:
             data = await _call_positions_api(cookie)
             positions = _filter_and_parse(data)
-            logger.info(
-                "Scraped %d positions for chat_id=%s (session reused)",
-                len(positions),
-                chat_id,
-            )
+            logger.info("Scraped %d positions for chat_id=%s (session reused)", len(positions), chat_id)
             return positions
         except Exception as exc:
             if _is_session_expired_error(exc):
@@ -268,24 +240,14 @@ async def scrape_positions(chat_id: int, email: str, password: str) -> list[dict
             else:
                 raise
 
-    # Need a fresh login
     cookie = await _playwright_login(email, password, chat_id)
     data = await _call_positions_api(cookie)
     positions = _filter_and_parse(data)
-    logger.info(
-        "Scraped %d positions for chat_id=%s (fresh login)",
-        len(positions),
-        chat_id,
-    )
+    logger.info("Scraped %d positions for chat_id=%s (fresh login)", len(positions), chat_id)
     return positions
 
 
 async def login_and_validate(email: str, password: str, chat_id: int) -> list[dict]:
-    """
-    Used during /start onboarding: perform a fresh login, validate the session,
-    return the current positions list.  Raises RuntimeError on failure.
-    """
-    # Remove any stale session first
     path = _session_path(chat_id)
     if os.path.exists(path):
         os.remove(path)

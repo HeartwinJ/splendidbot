@@ -1,7 +1,3 @@
-"""
-telegram_bot.py — Telegram command handlers and message formatting.
-"""
-
 import asyncio
 import logging
 import re
@@ -22,36 +18,28 @@ logger = logging.getLogger(__name__)
 UK_TZ = pytz.timezone("Europe/London")
 POSITIONS_URL = f"{ONSINCH_BASE_URL}/react/position?ignoreCapacity=false"
 
-# ---------------------------------------------------------------------------
-# MarkdownV2 helpers
-# ---------------------------------------------------------------------------
-
 _SPECIAL_CHARS = r"\_*[]()~`>#+-=|{}.!"
 
 
 def md_escape(text: str) -> str:
-    """Escape all MarkdownV2 special characters."""
     return re.sub(r"([" + re.escape(_SPECIAL_CHARS) + r"])", r"\\\1", text)
 
 
 def _format_dt_range(start_iso: str, end_iso: str) -> str:
-    """Return e.g. 'Wed 7 May, 11:00 – 22:00' in UK local time."""
     start_utc = datetime.fromisoformat(start_iso).replace(tzinfo=timezone.utc)
     end_utc = datetime.fromisoformat(end_iso).replace(tzinfo=timezone.utc)
     start_uk = start_utc.astimezone(UK_TZ)
     end_uk = end_utc.astimezone(UK_TZ)
-    date_str = start_uk.strftime("%-d %b")  # "7 May"
-    day_str = start_uk.strftime("%a")                    # "Wed"
+    date_str = start_uk.strftime("%-d %b")
+    day_str = start_uk.strftime("%a")
     start_t = start_uk.strftime("%H:%M")
     end_t = end_uk.strftime("%H:%M")
     return f"{day_str} {date_str}, {start_t} – {end_t}"
 
 
 def format_position_message(pos: dict) -> str:
-    """Build a MarkdownV2-safe Telegram message for a single position."""
     lines: list[str] = []
 
-    # Header line
     if pos["featured"] and not pos["in_conflict"]:
         lines.append(f"⭐ *Featured: {md_escape(pos['shift_name'])}*")
     elif pos["in_conflict"]:
@@ -60,9 +48,8 @@ def format_position_message(pos: dict) -> str:
     else:
         lines.append(f"📋 *{md_escape(pos['shift_name'])}*")
 
-    lines.append("")  # blank line
+    lines.append("")
 
-    # Profession + title + role
     profession_str = md_escape(pos["profession"])
     if pos["title"]:
         profession_str += f" — {md_escape(pos['title'])}"
@@ -70,17 +57,14 @@ def format_position_message(pos: dict) -> str:
         profession_str += " — 🎖️ Team Leader"
     lines.append(f"👤 {profession_str}")
 
-    # Date/time
     try:
         dt_str = _format_dt_range(pos["start_time"], pos["end_time"])
         lines.append(f"📅 {md_escape(dt_str)}")
     except Exception:
         lines.append(f"📅 {md_escape(pos['start_time'])}")
 
-    # Location
     lines.append(f"📍 {md_escape(pos['location'])}")
 
-    # Capacity
     spots = pos["free_capacity"]
     spot_word = "spot" if spots == 1 else "spots"
     if spots == 0:
@@ -88,21 +72,15 @@ def format_position_message(pos: dict) -> str:
     else:
         lines.append(f"👥 {md_escape(str(spots))} {spot_word} available")
 
-    # Requirements warning
     if pos.get("requirements_failed"):
         lines.append("")
         lines.append("⚠️ You may not meet the requirements for this position")
 
-    # Link
     lines.append("")
     lines.append(f"🔗 [View on OnSinch]({POSITIONS_URL})")
 
     return "\n".join(lines)
 
-
-# ---------------------------------------------------------------------------
-# Command handlers
-# ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
@@ -149,7 +127,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     status = user["status"]
     email = user["email"]
     updated = user["updated_at"].strftime("%Y-%m-%d %H:%M UTC") if user["updated_at"] else "—"
-
     status_emoji = {"active": "✅", "inactive": "⏸", "auth_failed": "❌"}.get(status, "❓")
 
     await update.message.reply_text(
@@ -201,25 +178,19 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await asyncio.sleep(MESSAGE_SEND_DELAY)
 
 
-# ---------------------------------------------------------------------------
-# Credential message handler
-# ---------------------------------------------------------------------------
-
 async def handle_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
     message = update.message
     text = (message.text or "").strip()
 
     if ":" not in text:
-        return  # not a credential message, ignore
+        return
 
-    # Delete the message immediately for security
     try:
         await context.bot.delete_message(chat_id=chat_id, message_id=message.message_id)
     except Exception as exc:
         logger.warning("Could not delete credential message: %s", exc)
 
-    # Parse credentials (split on first colon only)
     email, _, password = text.partition(":")
     email = email.strip()
     password = password.strip()
@@ -238,7 +209,7 @@ async def handle_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
         await scraper.login_and_validate(email, password, chat_id)
-    except RuntimeError as exc:
+    except Exception as exc:
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=validating_msg.message_id,
@@ -257,10 +228,6 @@ async def handle_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
 
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
-
 def build_application(token: str) -> Application:
     app = Application.builder().token(token).build()
 
@@ -268,18 +235,12 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("stop", cmd_stop))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("check", cmd_check))
-
-    # Catch all plain-text messages as potential credential submissions
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_credentials)
     )
 
     return app
 
-
-# ---------------------------------------------------------------------------
-# Notification sender (called from scheduler)
-# ---------------------------------------------------------------------------
 
 async def send_new_shift_notification(bot, chat_id: int, pos: dict) -> None:
     try:

@@ -68,10 +68,6 @@ async def init_db() -> None:
     logger.info("Database schema initialised")
 
 
-# ---------------------------------------------------------------------------
-# User operations
-# ---------------------------------------------------------------------------
-
 async def upsert_user(chat_id: int, email: str, password: str) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -114,10 +110,6 @@ async def get_active_users() -> list[asyncpg.Record]:
     async with pool.acquire() as conn:
         return await conn.fetch("SELECT * FROM users WHERE status = 'active'")
 
-
-# ---------------------------------------------------------------------------
-# Seen listings operations
-# ---------------------------------------------------------------------------
 
 async def get_seen_listing_ids(chat_id: int) -> set[str]:
     pool = await get_pool()
