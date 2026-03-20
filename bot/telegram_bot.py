@@ -170,15 +170,18 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
-    if not positions:
-        await update.message.reply_text("No available shifts found right now.")
+    seen_ids = await db.get_seen_listing_ids(chat_id)
+    new_positions = [p for p in positions if str(p["id"]) not in seen_ids]
+
+    if not new_positions:
+        await update.message.reply_text("No new shifts found right now.")
         return
 
     await update.message.reply_text(
-        f"Found *{len(positions)}* available shift(s):",
+        f"Found *{len(new_positions)}* new shift(s):",
         parse_mode=ParseMode.MARKDOWN,
     )
-    for pos in positions:
+    for pos in new_positions:
         try:
             await update.message.reply_text(
                 format_position_message(pos),
