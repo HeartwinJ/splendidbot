@@ -199,8 +199,6 @@ def _filter_and_parse(data: dict) -> list[dict]:
             continue
         if pos.get("freeCapacity", 0) <= 0:
             continue
-        if pos.get("applicants"):
-            continue
         if pos["id"] in booked_position_ids:
             continue
 
@@ -231,6 +229,7 @@ def _filter_and_parse(data: dict) -> list[dict]:
             "in_conflict": pos.get("inConflict", False),
             "conflicting_positions": pos.get("conflicting", {}).get("position", []),
             "requirements_failed": pos.get("requirementsFailed", False),
+            "applicants": bool(pos.get("applicants", False)),
         })
 
     return result

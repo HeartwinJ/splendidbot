@@ -84,6 +84,10 @@ def format_position_message(pos: dict) -> str:
     else:
         lines.append(f"👥 {md_escape(str(spots))} {spot_word} available")
 
+    if pos.get("applicants"):
+        lines.append("")
+        lines.append("📝 _Sign up as applicant_")
+
     if pos.get("requirements_failed"):
         lines.append("")
         lines.append("⚠️ You may not meet the requirements for this position")
