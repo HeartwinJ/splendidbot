@@ -72,9 +72,6 @@ async def run_scrape_cycle(app: Application, silent: bool = False) -> None:
         else:
             logger.debug("No new positions for chat_id=%s", chat_id)
 
-        all_visible_ids = [str(p["id"]) for p in positions]
-        await db.mark_listings_seen(chat_id, all_visible_ids)
-
     logger.info("Scrape cycle complete")
 
 

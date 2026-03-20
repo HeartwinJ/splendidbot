@@ -6,7 +6,7 @@ from typing import Optional
 
 import pytz
 from telegram import Update
-from telegram.constants import ParseMode
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 import db
@@ -23,6 +23,17 @@ _SPECIAL_CHARS = r"\_*[]()~`>#+-=|{}.!"
 
 def md_escape(text: str) -> str:
     return re.sub(r"([" + re.escape(_SPECIAL_CHARS) + r"])", r"\\\1", text)
+
+
+async def _keep_typing(bot, chat_id: int) -> None:
+    try:
+        while True:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
 
 
 def _format_dt_range(start_iso: str, end_iso: str) -> str:
@@ -60,7 +71,8 @@ def format_position_message(pos: dict) -> str:
     try:
         dt_str = _format_dt_range(pos["start_time"], pos["end_time"])
         lines.append(f"📅 {md_escape(dt_str)}")
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to format datetime for position %s: %s", pos.get("id"), exc)
         lines.append(f"📅 {md_escape(pos['start_time'])}")
 
     lines.append(f"📍 {md_escape(pos['location'])}")
@@ -84,7 +96,12 @@ def format_position_message(pos: dict) -> str:
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    user = await db.get_user(chat_id)
+    try:
+        user = await db.get_user(chat_id)
+    except Exception as exc:
+        logger.error("cmd_start db error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
+        return
 
     if user and user["status"] == "active":
         await update.message.reply_text(
@@ -120,57 +137,82 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    user = await db.get_user(chat_id)
-    if not user:
-        await update.message.reply_text("You're not registered yet. Use /start to set up.")
-        return
-    await db.set_user_status(chat_id, "inactive")
-    await update.message.reply_text("Notifications paused. Send /start to resume.")
+    try:
+        user = await db.get_user(chat_id)
+        if not user:
+            await update.message.reply_text("You're not registered yet. Use /start to set up.")
+            return
+        await db.set_user_status(chat_id, "inactive")
+        await update.message.reply_text("Notifications paused. Send /start to resume.")
+    except Exception as exc:
+        logger.error("cmd_stop error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    user = await db.get_user(chat_id)
-    if not user:
-        await update.message.reply_text("You're not registered yet. Use /start to set up.")
-        return
+    try:
+        user = await db.get_user(chat_id)
+        if not user:
+            await update.message.reply_text("You're not registered yet. Use /start to set up.")
+            return
 
-    seen_ids = await db.get_seen_listing_ids(chat_id)
-    status = user["status"]
-    email = user["email"]
-    updated = user["updated_at"].strftime("%Y-%m-%d %H:%M UTC") if user["updated_at"] else "—"
-    status_emoji = {"active": "✅", "inactive": "⏸", "auth_failed": "❌"}.get(status, "❓")
+        seen_ids = await db.get_seen_listing_ids(chat_id)
+        status = user["status"]
+        email = user["email"]
+        updated = user["updated_at"].strftime("%Y-%m-%d %H:%M UTC") if user["updated_at"] else "—"
+        status_emoji = {"active": "✅", "inactive": "⏸", "auth_failed": "❌"}.get(status, "❓")
 
-    await update.message.reply_text(
-        f"{status_emoji} Status: *{status}*\n"
-        f"Account: `{email}`\n"
-        f"Last updated: {updated}\n"
-        f"Tracked listings: {len(seen_ids)}",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+        await update.message.reply_text(
+            f"{status_emoji} Status: *{md_escape(status)}*\n"
+            f"Account: `{md_escape(email)}`\n"
+            f"Last updated: {md_escape(updated)}\n"
+            f"Tracked listings: {len(seen_ids)}",
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+    except Exception as exc:
+        logger.error("cmd_status error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
 
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.effective_chat.id
-    user = await db.get_user(chat_id)
+    try:
+        user = await db.get_user(chat_id)
+    except Exception as exc:
+        logger.error("cmd_check db error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
+        return
+
     if not user:
         await update.message.reply_text("You're not registered yet. Use /start to set up.")
         return
 
-    await update.message.reply_text("🔍 Checking for available shifts...")
+    logger.info("Manual check triggered by chat_id=%s", chat_id)
+    await update.message.reply_text("🔍 Checking for available shifts…")
 
+    _typing = asyncio.create_task(_keep_typing(context.bot, chat_id))
     try:
         positions = await scraper.scrape_positions(
             chat_id, user["email"], user["password"]
         )
-    except RuntimeError as exc:
+    except Exception as exc:
+        logger.error("Manual check failed for chat_id=%s: %s", chat_id, exc)
         await update.message.reply_text(
             f"❌ Failed to check shifts: {exc}\n\n"
             "Your session may have expired — use /start to re-authenticate."
         )
         return
+    finally:
+        _typing.cancel()
 
-    seen_ids = await db.get_seen_listing_ids(chat_id)
+    try:
+        seen_ids = await db.get_seen_listing_ids(chat_id)
+    except Exception as exc:
+        logger.error("cmd_check seen_ids error for chat_id=%s: %s", chat_id, exc)
+        await update.message.reply_text("❌ Something went wrong. Please try again.")
+        return
+
     new_positions = [p for p in positions if str(p["id"]) not in seen_ids]
 
     if not new_positions:
@@ -219,23 +261,35 @@ async def handle_credentials(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     validating_msg = await context.bot.send_message(
-        chat_id=chat_id, text="🔐 Validating your credentials..."
+        chat_id=chat_id, text="🔐 Validating your credentials…"
     )
 
+    _typing = asyncio.create_task(_keep_typing(context.bot, chat_id))
     try:
         await scraper.login_and_validate(email, password, chat_id)
     except Exception as exc:
+        logger.warning("Login failed for chat_id=%s: %s", chat_id, exc)
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=validating_msg.message_id,
             text="❌ Login failed. Please check your credentials and try again. Send them as email:password",
         )
-        logger.warning("Login failed for chat_id=%s: %s", chat_id, exc)
+        return
+    finally:
+        _typing.cancel()
+
+    try:
+        await db.upsert_user(chat_id, email, password)
+    except Exception as exc:
+        logger.error("Failed to save user for chat_id=%s: %s", chat_id, exc)
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=validating_msg.message_id,
+            text="❌ Failed to save your credentials. Please try again.",
+        )
         return
 
-    await db.upsert_user(chat_id, email, password)
     logger.info("User registered/updated: chat_id=%s email=%s", chat_id, email)
-
     await context.bot.edit_message_text(
         chat_id=chat_id,
         message_id=validating_msg.message_id,

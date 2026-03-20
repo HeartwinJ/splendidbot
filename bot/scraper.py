@@ -131,7 +131,12 @@ async def _call_positions_api(cookie_value: str) -> dict:
                         response=response,
                     )
                 response.raise_for_status()
-                return response.json()
+                try:
+                    return response.json()
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"API returned non-JSON response (status {response.status_code})"
+                    ) from exc
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in (401, 403) or "Session expired" in str(exc):
                 raise
@@ -160,7 +165,13 @@ def _is_session_expired_error(exc: Exception) -> bool:
 
 
 def _filter_and_parse(data: dict) -> list[dict]:
-    entities = data["entities"]
+    try:
+        entities = data["entities"]
+        position_ids = data["result"]["positionIds"]
+    except (KeyError, TypeError) as exc:
+        logger.error("Unexpected API response structure: %s", exc)
+        return []
+
     positions = entities.get("Position", {})
     shifts = entities.get("Shift", {})
     professions = entities.get("Profession", {})
@@ -175,7 +186,7 @@ def _filter_and_parse(data: dict) -> list[dict]:
     now_utc = datetime.now(timezone.utc)
     result = []
 
-    for pos_id in data["result"]["positionIds"]:
+    for pos_id in position_ids:
         pos = positions.get(str(pos_id))
         if pos is None:
             continue
@@ -250,7 +261,10 @@ async def scrape_positions(chat_id: int, email: str, password: str) -> list[dict
 async def login_and_validate(email: str, password: str, chat_id: int) -> list[dict]:
     path = _session_path(chat_id)
     if os.path.exists(path):
-        os.remove(path)
+        try:
+            os.remove(path)
+        except OSError as exc:
+            logger.warning("Could not remove old session file for chat_id=%s: %s", chat_id, exc)
 
     cookie = await _playwright_login(email, password, chat_id)
     data = await _call_positions_api(cookie)

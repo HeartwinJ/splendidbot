@@ -142,7 +142,10 @@ async def cleanup_old_seen_listings(days: int = 30) -> int:
             "DELETE FROM seen_listings WHERE seen_at < NOW() - ($1 * INTERVAL '1 day')",
             days,
         )
-    deleted = int(result.split()[-1])
+    try:
+        deleted = int(result.split()[-1])
+    except (ValueError, IndexError):
+        deleted = 0
     if deleted:
         logger.info("Cleaned up %d old seen_listings entries", deleted)
     return deleted
